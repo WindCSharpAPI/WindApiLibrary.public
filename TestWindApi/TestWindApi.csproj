@@ -63,7 +63,7 @@
     <Reference Include="System.Xml" />
     <Reference Include="WindOriginalApiLibrary, Version=1.0.5021.25680, Culture=neutral, processorArchitecture=x86">
       <SpecificVersion>False</SpecificVersion>
-      <HintPath>..\Debug\WindOriginalApiLibrary.dll</HintPath>
+      <HintPath>Debug\WindOriginalApiLibrary.dll</HintPath>
     </Reference>
   </ItemGroup>
   <ItemGroup>

@@ -7,13 +7,9 @@ using System.Threading;
 
 using WindApiLibrary;
 
-using norlib;
-using norlib.Error;
-using norlib.SystemExtension;
 
 namespace ConsoleApplication2
 {
-    aaaaaa
     class Program
     {
         static void Main(string[] args)
