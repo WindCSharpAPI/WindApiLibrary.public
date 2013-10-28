@@ -71,6 +71,8 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Class1.cs" />
+    <Compile Include="ClassHelper.cs" />
+    <Compile Include="ErrorObject.Mini.cs" />
     <Compile Include="WindApi.Public.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>

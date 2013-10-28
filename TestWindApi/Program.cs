@@ -7,7 +7,6 @@ using System.Threading;
 
 using WindApiLibrary;
 
-
 namespace ConsoleApplication2
 {
     class Program

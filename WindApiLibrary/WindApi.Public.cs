@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 
@@ -13,133 +12,120 @@ namespace WindApiLibrary
     {
         public WindApi()
         {
-            Opened = false;
-            GCHandle.Alloc(Marshal.GetFunctionPointerForDelegate(_fnOnOriginlCommonCallback = new IEventHandler(_OnOriginlCommonCallback)), GCHandleType.Pinned);
-            GCHandle.Alloc(Marshal.GetFunctionPointerForDelegate(_fnOnOriginalCallbackAlways = new IEventHandler(_OnOriginalCallbackAlways)), GCHandleType.Pinned);
-            GCHandle.Alloc(Marshal.GetFunctionPointerForDelegate(_fnOnOriginalCallbackOneTime = new IEventHandler(_OnOriginalCallbackOneTime)), GCHandleType.Pinned);
+
         }
+
         public string UserName { get; private set; }
         public string Password { get; private set; }
-        public bool Opened { get; private set; }
 
-        public delegate void ONMCCALLBACK(eWQErr a, QuantData b);
+        public ErrorObject OpenAsync(string arg_strUserName, string arg_strPassword, Action<ErrorObject> arg_fn)
+        {
+            var eErr = eWQErr.OK;
+            _fnOpen = arg_fn;
+            UserName = arg_strUserName;
+            Password = arg_strPassword;
+            eErr = WindOriginalApi.SetEventHandler(_OnOriginlCallback);
+            if (eWQErr.OK != eErr)
+                return ErrorObject.ReturnFalse("SetEventHandler错误:{0}", eErr);
 
-        public eWQErr OpenAsync(string arg_strUserName, string arg_strPassword, Action<eWQErr> arg_fn)
-        {
-            return _OpenAsync(arg_strUserName ?? "", arg_strPassword ?? "", true , false, arg_fn);          
+            var info = new WQAUTH_INFO();
+            info.strUserName = UserName;
+            info.strPassword = Password;
+            info.bSilentLogin = 1;
+            eErr = WindOriginalApi.WDataAuthorize(ref info);
+
+            if (eWQErr.OK != eErr)
+                return ErrorObject.ReturnFalse("WDataAuthorize错误:{0}", eErr);
+            return ErrorObject.True;
         }
-        public eWQErr OpenAsync(Action<eWQErr> arg_fn)
+        public ErrorObject OpenAsync(Action<ErrorObject> arg_fn)
         {
-            return _OpenAsync( "", "", false , false, arg_fn);     
+            var eErr = eWQErr.OK;
+            _fnOpen = arg_fn;
+            UserName = "";
+            Password = "";
+            eErr = WindOriginalApi.SetEventHandler(_OnOriginlCallback);
+            if (eWQErr.OK != eErr)
+                return ErrorObject.ReturnFalse("SetEventHandler错误:{0}", eErr);
+
+            var info = new WQAUTH_INFO();
+            info.strUserName = UserName;
+            info.strPassword = Password;
+            info.bSilentLogin = 0;
+            eErr = WindOriginalApi.WDataAuthorize(ref info);
+
+            if (eWQErr.OK != eErr)
+                return ErrorObject.ReturnFalse("WDataAuthorize错误:{0}", eErr);
+            return ErrorObject.True;
         }
-        public eWQErr WSDAsync(string arg_strCode, string arg_strIndicators, DateTime arg_dateStart, DateTime arg_dateEnd, ONMCCALLBACK arg_fn)
+        public ErrorObject WSDAsync(string arg_strCode, string arg_strIndicators, DateTime arg_dateStart, DateTime arg_dateEnd, Action<ErrorObject, QuantData> arg_fn)
         {
             var strDateStart = _DateToWindString(arg_dateStart);
             var strDateEnd = _DateToWindString(arg_dateEnd);
-            IntPtr para;
-            //fnNC which will be called by native codes  will not be collected or relocated by GC until GCHandle.Free is called.
-            var fnNC = _CreateOriginalCallbackWrapper(arg_fn, out para, true);
-            var eo = _WQIdToWQErr(WindOriginalApi.WSD(arg_strCode, arg_strIndicators, strDateStart, strDateEnd, "", fnNC , para));          
+            IEventHandler fn = null;
+            var eo = _WQIdToEO(WindOriginalApi.WSD(arg_strCode, arg_strIndicators, strDateStart, strDateEnd, "", fn = (qevent, para) =>
+            {
+                arg_fn(_ErrCodeToEO(qevent.ErrCode), QuantData.FromIntPtr(qevent.pQuantData));
+                return 0;
+            }, IntPtr.Zero));
+            _vtMCCallback.Add(fn);
             return eo;
         }
-        public eWQErr WSQAsync(string arg_strCodes, string arg_strIndicators, bool arg_bSnapOnly,ONMCCALLBACK arg_fn)
+        public ErrorObject WSQAsync(string arg_strCodes, string arg_strIndicators, bool arg_bSnapOnly, Action<ErrorObject, QuantData> arg_fn)
         {
-            IntPtr para;
-            //fnNC which will be called by native codes  will not be collected or relocated by GC until GCHandle.Free is called.
-            var fnNC = _CreateOriginalCallbackWrapper(arg_fn, out para , arg_bSnapOnly);
-            return _WQIdToWQErr(WindOriginalApi.WSQ(arg_strCodes, arg_strIndicators, string.Format("realtime={0}", arg_bSnapOnly ? "N" : "Y"), fnNC, para));           
-        }
-        public eWQErr WSSAsync(string arg_strCodes, string arg_strIndicators, string arg_strParas, ONMCCALLBACK arg_fn)
-        {
-            IntPtr para;         
-            var fnNC = _CreateOriginalCallbackWrapper(arg_fn, out para, true);
-            var err = _WQIdToWQErr(WindOriginalApi.WSS(arg_strCodes, arg_strIndicators, arg_strParas, fnNC, para));
-            return err;
-        }        
-
-
-        /// <summary>
-        /// 打开Api
-        /// </summary>
-        /// <param name="arg_strUserName"></param>
-        /// <param name="arg_strPassword"></param>
-        /// <param name="arg_bSilentLogin"></param>
-        /// <param name="arg_bForceOpen">
-        /// 忽略Open状态,强行打开Api
-        /// </param>
-        /// <param name="arg_fn">Long-time-life callback</param>
-        /// <returns></returns>
-        eWQErr _OpenAsync(string arg_strUserName, string arg_strPassword, bool arg_bSilentLogin , bool arg_bForceOpen , Action<eWQErr> arg_fn)
-        {
-            var eErr = eWQErr.OK;           
-            if( !arg_bForceOpen && Opened)
+            if (arg_bSnapOnly)
             {
-                return eErr;//不重复登录
+                return _WQIdToEO(WindOriginalApi.WSQ(arg_strCodes, arg_strIndicators, string.Format("realtime={0}", arg_bSnapOnly ? "N" : "Y"), (qevent, para) =>
+                {
+                    arg_fn(_ErrCodeToEO(qevent.ErrCode), QuantData.FromIntPtr(qevent.pQuantData));
+                    return 0;
+                }, IntPtr.Zero));
             }
-            _fnOnOpen = arg_fn;         
-            UserName = arg_strUserName;
-            Password = arg_strPassword;
-            eErr = WindOriginalApi.SetEventHandler(_fnOnOriginlCommonCallback);
-            if (eWQErr.OK != eErr)
-                return eErr;
+            else
+            {
+                var fn = new IEventHandler((qevent, para) =>
+                {
+                    arg_fn(_ErrCodeToEO(qevent.ErrCode), QuantData.FromIntPtr(qevent.pQuantData));
+                    return 0;
+                });
+                _vtMCCallback.Add(fn);
 
-            var info = new WQAUTH_INFO();
-            info.strUserName = UserName = arg_bSilentLogin ? arg_strUserName : "";
-            info.strPassword = Password = arg_bSilentLogin ? arg_strPassword : "";
-            info.bSilentLogin = arg_bSilentLogin?1:0;
-            eErr = WindOriginalApi.WDataAuthorize(ref info);           
-            return eErr;
-        }       
-        /// <summary>
-        /// 创建一个给Native Codes调用的Callback的Wrapper
-        /// 保证函数对象不被GC回收或者Relocation
-        /// </summary>
-        /// <param name="arg_fnOriginalCallback"></param>
-        /// <returns></returns>
-        IEventHandler _CreateOriginalCallbackWrapper(ONMCCALLBACK arg_fnMCCallback, out IntPtr argo_para, bool arg_bCallOneTime = true)
-        {
-            var hMCCallback = GCHandle.Alloc(Marshal.GetFunctionPointerForDelegate(arg_fnMCCallback), GCHandleType.Pinned);
-            argo_para = GCHandle.ToIntPtr(hMCCallback);
-            if (arg_bCallOneTime)
-                return _fnOnOriginalCallbackOneTime;
-            else           
-                return _fnOnOriginalCallbackAlways;            
-        }
-        int _OnOriginlCommonCallback(WQEvent quantdata, IntPtr parameter)
-        {
-            if ( 0 == quantdata.EventID || eWQEventType.eWQLogin == quantdata.EventType)
-            {
-                Opened = !quantdata.ErrCode.IsFalse();
-                if(null != _fnOnOpen)
-                    _fnOnOpen(quantdata.ErrCode);
-            }           
-            return 0;
-        }
-        int _OnOriginalCallbackOneTime(WQEvent arg_wqevent, IntPtr arg_para)
-        {          
-            var hFnMCCallback = GCHandle.FromIntPtr(arg_para);
-            var fnMCCallback = (ONMCCALLBACK)Marshal.GetDelegateForFunctionPointer((IntPtr)hFnMCCallback.Target, typeof(ONMCCALLBACK));
-            //告知GC可以清除这个对象
-            hFnMCCallback.Free();
-            fnMCCallback(arg_wqevent.ErrCode, QuantData.FromIntPtr(arg_wqevent.pQuantData));
-            return 0;
-        }       
-        int _OnOriginalCallbackAlways(WQEvent arg_wqevent, IntPtr arg_para)
-        {
-            if (null == arg_wqevent)
-            {
-                int b = 3;
+                return _WQIdToEO(WindOriginalApi.WSQ(arg_strCodes, arg_strIndicators, string.Format("realtime={0}", arg_bSnapOnly ? "N" : "Y"), fn, IntPtr.Zero));
             }
-            if (arg_para == null)
-            {
 
-                int a = 3;
+        }
+        public ErrorObject WSSAsync(string arg_strCodes, string arg_strIndicators, string arg_strParas, Action<ErrorObject, QuantData> arg_fn)
+        {
+            IEventHandler fn = null;
+            var eo = _WQIdToEO(WindOriginalApi.WSS(arg_strCodes, arg_strIndicators, arg_strParas, fn = (qevent, para) =>
+            {
+                arg_fn(_ErrCodeToEO(qevent.ErrCode), QuantData.FromIntPtr(qevent.pQuantData));
+                return 0;
+            }, IntPtr.Zero));
+            _vtMCCallback.Add(fn);
+            return eo;
+        }
+
+
+        Action<ErrorObject> _fnOpen;
+        readonly List<IEventHandler> _vtMCCallback = new List<IEventHandler>();
+
+        int _OnOriginlCallback(WQEvent quantdata, IntPtr parameter)
+        {
+            if (quantdata.EventID == 0)
+            {
+                if (quantdata.ErrCode != eWQErr.OK)
+                {
+                    _fnOpen(ErrorObject.ReturnFalse("WDataAuthorize异步中错误:{0}", quantdata.ErrCode));
+                }
             }
-            var hFnMCCallback = GCHandle.FromIntPtr(arg_para);
-            var fnMCCallback = (ONMCCALLBACK)Marshal.GetDelegateForFunctionPointer((IntPtr)hFnMCCallback.Target, typeof(ONMCCALLBACK));
-            //由于是推送的回调函数,所以不需要告知GC可以清除这个对象,直到CancelRequest被调用
-            //hFnMCCallback.Free();
-            fnMCCallback(arg_wqevent.ErrCode, QuantData.FromIntPtr(arg_wqevent.pQuantData));
+            else if (quantdata.EventType == eWQEventType.eWQLogin)
+            {
+                if (quantdata.ErrCode == eWQErr.OK)
+                    _fnOpen(ErrorObject.True);
+                else
+                    _fnOpen( new ErrorObject(false, "WDataAuthorize失败:" + quantdata.ErrCode, null, QuantData.FromIntPtr(quantdata.pQuantData)));
+            }
             return 0;
         }
         /// <summary>
@@ -151,148 +137,144 @@ namespace WindApiLibrary
         {
             return arg_datetime.ToString("yyyy-MM-dd");
         }
-        eWQErr _WQIdToWQErr(int arg_nWQId)
+        ErrorObject _WQIdToEO(int arg_nWQId)
         {
             if (arg_nWQId <= 0)
-                return eWQErr.UNKNOWN;//无法转换nWQId到eWQErr
+                return ErrorObject.ReturnFalse("错误:{0}", arg_nWQId);
             else
-                return eWQErr.OK;
+                return ErrorObject.True;
         }
-      
-        Action<eWQErr> _fnOnOpen;
-        readonly IEventHandler _fnOnOriginlCommonCallback;
-        readonly IEventHandler _fnOnOriginalCallbackOneTime;
-        readonly IEventHandler _fnOnOriginalCallbackAlways;
+        ErrorObject _ErrCodeToEO(eWQErr arg_errcode)
+        {
+            if (arg_errcode.IsFlag(eWQErr.OK))
+                return ErrorObject.True;
+            else
+                return ErrorObject.ReturnFalse("{0}", arg_errcode);
+        }
     }
 
     public static class ApiHelper
     {
-        public static eWQErr Open(this WindApi arg_api, string arg_strUserName, string arg_strPassword, int arg_nTimeOutMS)
+        public static ErrorObject Open(this WindApi arg_api, string arg_strUserName, string arg_strPassword, int arg_nTimeOutMS)
         {
             var smph = new Semaphore(0, 1);
-            var eErr = eWQErr.OK;
-            eErr = arg_api.OpenAsync(arg_strUserName, arg_strPassword, (errI) =>
+            var eoRet = ErrorObject.True;
+            var eo = arg_api.OpenAsync(arg_strUserName, arg_strPassword, (eoI) =>
             {
-                eErr = errI;
+                eoRet = eoI;
                 smph.Release();
             });
-            //直接返回了错误,无须等待Callback返回
-            if (eErr.IsFalse())
+            if (eo.IsFalse)
             {
-                return eErr;
+                return eoRet = eo;
             }
-            //等待异步返回
+
             if (smph.WaitOne(arg_nTimeOutMS))
             {
-                return eErr;
+                return eoRet;
             }
             else
             {
-                return eErr = eWQErr.TIMEOUT;
+                return eoRet = ErrorObject.ReturnFalse("WindApi.Open超时{0}毫秒", arg_nTimeOutMS);
             }
         }
-        public static eWQErr Open(this WindApi arg_api, int arg_nTimeOutMS)
+        public static ErrorObject Open(this WindApi arg_api, int arg_nTimeOutMS)
         {
             var smph = new Semaphore(0, 1);
-            var eErr = eWQErr.OK;
-            eErr = arg_api.OpenAsync((errI) =>
+            var eoRet = ErrorObject.True;
+            var eo = arg_api.OpenAsync((eoI) =>
             {
-                eErr = errI;
+                eoRet = eoI;
                 smph.Release();
             });
-            //直接返回了错误,无须等待Callback返回
-            if (eErr.IsFalse())
+            if (eo.IsFalse)
             {
-                return eErr;
+                return eoRet = eo;
             }
-            //等待异步返回
+
             if (smph.WaitOne(arg_nTimeOutMS))
             {
-                return eErr;
+                return eoRet;
             }
             else
             {
-                return eErr = eWQErr.TIMEOUT;
+                return eoRet = ErrorObject.ReturnFalse("WindApi.Open超时{0}毫秒", arg_nTimeOutMS);
             }
         }
-        public static QuantData WSD(this WindApi arg_api, string arg_strCode, string arg_strIndicators, DateTime arg_dateStart, DateTime arg_dateEnd, out eWQErr argo_eWQErr, int arg_nTimeOutMS)
+        public static QuantData WSD(this WindApi arg_api, string arg_strCode, string arg_strIndicators, DateTime arg_dateStart, DateTime arg_dateEnd, out ErrorObject argo_eo, int arg_nTimeOutMS)
         {
             QuantData oRet = null;
-            var eErr = eWQErr.OK;
+            var eoRet = ErrorObject.True;
             var smph = new Semaphore(0, 1);
-            var err = arg_api.WSDAsync(arg_strCode, arg_strIndicators, arg_dateStart, arg_dateEnd, (errI, o) =>
+            var eo = arg_api.WSDAsync(arg_strCode, arg_strIndicators, arg_dateStart, arg_dateEnd, (eoI, o) =>
             {
                 oRet = o;
-                eErr = errI;
+                eoRet = eoI;
                 smph.Release();
             });
-            if (err.IsFalse())
+            if (eo.IsFalse)
             {
-                argo_eWQErr = err;
+                argo_eo = eo;
             }
             else if (!smph.WaitOne(arg_nTimeOutMS))
             {
-                argo_eWQErr = eWQErr.TIMEOUT;
+                argo_eo = ErrorObject.ReturnFalse("WindApi.WSD超时{0}毫秒", arg_nTimeOutMS);
             }
             else
             {
-                argo_eWQErr = eErr;
+                argo_eo = eoRet;
             }
             return oRet;
         }
-        public static QuantData WSQ(this WindApi arg_api, string arg_strCodes, string arg_strIndicators, out eWQErr argo_eWQErr, int arg_nTimeOutMS)
+        public static QuantData WSQ(this WindApi arg_api, string arg_strCodes, string arg_strIndicators, out ErrorObject argo_eo, int arg_nTimeOutMS)
         {
             QuantData oRet = null;
-            var eErr = eWQErr.OK;
+            var eoRet = ErrorObject.True;
             var smph = new Semaphore(0, 1);
-            var err = arg_api.WSQAsync(arg_strCodes, arg_strIndicators, true, (errI, o) =>
+            var eo = arg_api.WSQAsync(arg_strCodes, arg_strIndicators, true, (eoI, o) =>
             {
                 oRet = o;
-                eErr = errI;
+                eoRet = eoI;
                 smph.Release();
             });
-            if (err.IsFalse())
+            if (eo.IsFalse)
             {
-                argo_eWQErr = err;
+                argo_eo = eo;
             }
             else if (!smph.WaitOne(arg_nTimeOutMS))
             {
-                argo_eWQErr = eWQErr.TIMEOUT;
+                argo_eo = ErrorObject.ReturnFalse("WindApi.WSQ超时{0}毫秒", arg_nTimeOutMS);
             }
             else
             {
-                argo_eWQErr = eErr;
+                argo_eo = eoRet;
             }
             return oRet;
         }
-        public static QuantData WSS(this WindApi arg_api, string arg_strCodes, string arg_strIndicators, string arg_strParas, out eWQErr argo_eWQErr, int arg_nTimeOutMS)
+        public static QuantData WSS(this WindApi arg_api, string arg_strCodes, string arg_strIndicators, string arg_strParas, out ErrorObject argo_eo, int arg_nTimeOutMS)
         {
             QuantData oRet = null;
-            var eErr = eWQErr.OK;
+            var eoRet = ErrorObject.True;
             var smph = new Semaphore(0, 1);
-            var err = arg_api.WSSAsync(arg_strCodes, arg_strIndicators, arg_strParas, (errI, o) =>
+            var eo = arg_api.WSSAsync(arg_strCodes, arg_strIndicators, arg_strParas, (eoI, o) =>
             {
                 oRet = o;
-                eErr = errI;
+                eoRet = eoI;
                 smph.Release();
             });
-            if (err.IsFalse())
+            if (eo.IsFalse)
             {
-                argo_eWQErr = err;
+                argo_eo = eo;
             }
             else if (!smph.WaitOne(arg_nTimeOutMS))
             {
-                argo_eWQErr = eWQErr.TIMEOUT;
+                argo_eo = ErrorObject.ReturnFalse("WindApi.WSS超时{0}毫秒", arg_nTimeOutMS);
             }
             else
             {
-                argo_eWQErr = eErr;
+                argo_eo = eoRet;
             }
             return oRet;
-        }
-        public static bool IsFalse(this eWQErr arg_eWQErr)
-        {
-            return arg_eWQErr != eWQErr.OK;
         }
     }
 }

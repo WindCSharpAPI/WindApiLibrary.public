@@ -61,10 +61,6 @@
     <Reference Include="Microsoft.CSharp" />
     <Reference Include="System.Data" />
     <Reference Include="System.Xml" />
-    <Reference Include="WindOriginalApiLibrary, Version=1.0.5021.25680, Culture=neutral, processorArchitecture=x86">
-      <SpecificVersion>False</SpecificVersion>
-      <HintPath>Debug\WindOriginalApiLibrary.dll</HintPath>
-    </Reference>
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Program.cs" />
@@ -74,6 +70,10 @@
     <ProjectReference Include="..\WindApiLibrary\WindApiLibrary.Public.csproj">
       <Project>{860f4e8a-bf41-4dee-a549-9d4e86cdce58}</Project>
       <Name>WindApiLibrary.Public</Name>
+    </ProjectReference>
+    <ProjectReference Include="..\WindOriginalApiLibrary\WindQuantOriginalLibrary.vcxproj">
+      <Project>{0dc50bd1-3018-4de2-8bf0-2ed7dfb09e11}</Project>
+      <Name>WindOriginalApiLibrary</Name>
     </ProjectReference>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
